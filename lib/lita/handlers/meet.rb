@@ -62,9 +62,24 @@ module Lita
         redis.set('last_standup_started_at', Time.now)
         find_and_create_users
         message_all_users
+        last_check = redis.get('started_at')
+        until whole_team do
+           if last_check > 15.minutes.ago
+              results = check_completion
+              if results['not_completed'].count > 0
+                results['not_completed'].each do |user|
+                  send_nag(user)
+                end
+              end
+            else
+              last_check = True
+              update_room
+            end
+        end
       end
 
       def store_response(response)
+        #TODO: add check for the last person to response, trigger a play in the room
         return unless timing_is_right?
         response.reply('Response recorded. Thanks for partipating')
         date_string = Time.now.strftime('%Y%m%d')
@@ -106,6 +121,30 @@ module Lita
       # END bot methods
 
       private
+
+      def check_completion
+        completed = []
+        not_completed = []
+        results = []
+        check_prefix = Date.parse(redis.get("last_standup_started_at")).strftime('%Y%m%d')
+        @users.each do | user |
+          check = redis.get(check_prefix + "-" + user)
+          if check.nil?
+            not_completed[] = user
+          else
+            completed[] = user
+          end
+        end
+        results['completed'] = completed
+        results['not_completed'] = not_completed
+        return results
+      end
+
+      def send_nag(user)
+        source = Lita::Source.new(user: user)
+        robot.send_message(source, 'Hate to nag like a wife but would for the shake of god.')
+        robot.send_message(source, 'Send in your Standup notes using standup response!')
+      end
 
       def message_all_users
         @users.each do |user|
