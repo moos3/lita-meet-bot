@@ -1,4 +1,5 @@
 require 'json'
+require 'active_support/all'
 module Lita
   module Handlers
     class Meet < Handler
@@ -6,7 +7,7 @@ module Lita
       config :time_to_respond, types: [Integer, Float], default: 60 #minutes
       config :api_key, type: String, default: 'qArnqfhXFb3DWMYtOXuKxjG3iLGHYXHxKnZurDbFAQx2T0zsnm8DrQSYBQep6Njo'
       config :enable_http
-      config :standup_message, type: String, default: "Please tell me what you did yesterday, 1. what you're doing now 2. what you're working on today 3. something fun. Please prepend your answer with 'standup response'", required: true
+      config :standup_message, type: String, default: "Please tell me what you did yesterday, 1. what you're doing today 2. what did you do yesterday 3. something fun. Please prepend your answer with 'standup response'", required: true
 
 
       # handler bot routes
@@ -63,6 +64,7 @@ module Lita
         find_and_create_users
         message_all_users
         last_check = redis.get('last_standup_started_at')
+        whole_team = false
         until whole_team do
            if (last_check < 15.minutes.ago || last_check < 30.minutes.ago || last_check < 45.minutes.ago ) and not last_check > config.time_to_respond.ago
               results = check_completion
@@ -72,8 +74,8 @@ module Lita
                 end
               end
             else
-              whole_team = True
-              update_room
+              whole_team = true
+              update_room(response)
             end
         end
       end
