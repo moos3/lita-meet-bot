@@ -62,9 +62,9 @@ module Lita
         redis.set('last_standup_started_at', Time.now)
         find_and_create_users
         message_all_users
-        last_check = redis.get('started_at')
+        last_check = redis.get('last_standup_started_at')
         until whole_team do
-           if last_check > 15.minutes.ago
+           if (last_check < 15.minutes.ago || last_check < 30.minutes.ago || last_check < 45.minutes.ago ) and not last_check > config.time_to_respond.ago
               results = check_completion
               if results['not_completed'].count > 0
                 results['not_completed'].each do |user|
@@ -72,7 +72,7 @@ module Lita
                 end
               end
             else
-              last_check = True
+              whole_team = True
               update_room
             end
         end
@@ -141,9 +141,12 @@ module Lita
       end
 
       def send_nag(user)
-        source = Lita::Source.new(user: user)
-        robot.send_message(source, 'Hate to nag like a wife but would for the shake of god.')
-        robot.send_message(source, 'Send in your Standup notes using standup response!')
+        last_check = redis.get('last_standup_started_at')
+        if last_check < config.time_to_respond.ago?
+          source = Lita::Source.new(user: user)
+          robot.send_message(source, 'Hate to nag like a wife but would for the shake of god.')
+          robot.send_message(source, 'Send in your Standup notes using standup response!')
+        end
       end
 
       def message_all_users
