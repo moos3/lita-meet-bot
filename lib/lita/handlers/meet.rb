@@ -4,7 +4,8 @@ module Lita
   module Handlers
     class Meet < Handler
       config :name_of_auth_group, type: Symbol, default: :standup_participants, required: true
-      config :time_to_respond, types: [Integer, Float], default: 60 #minutes
+      config :time_to_respond, types: [Integer], default: 60*60 # 60 minutes in seconds
+      config :nag_frequency, types: [Integer], default: 15*60 # 15 minutes in seconds
       config :api_key, type: String, default: 'qArnqfhXFb3DWMYtOXuKxjG3iLGHYXHxKnZurDbFAQx2T0zsnm8DrQSYBQep6Njo'
       config :enable_http
       config :standup_message, type: String, default: "Please tell me what you did yesterday, 1. what you're doing today 2. what did you do yesterday 3. something fun. Please prepend your answer with 'standup response'", required: true
@@ -63,39 +64,23 @@ module Lita
         redis.set('last_standup_started_at', Time.now)
         find_and_create_users
         message_all_users
-        last_check = redis.get('last_standup_started_at')
-        whole_team = false
-        until whole_team do
-           if (last_check < 15.minutes.ago || last_check < 30.minutes.ago || last_check < 45.minutes.ago ) and not last_check > config.time_to_respond.ago
-              results = check_completion
-              if results['not_completed'].count > 0
-                results['not_completed'].each do |user|
-                  send_nag(user)
-                end
-              end
-            else
-              whole_team = true
-              update_room(response)
-            end
-        end
+        nag_users_for_response if config.nag_frequency.present? && config.nag_frequency > 0
       end
 
       def store_response(response)
         #TODO: add check for the last person to response, trigger a play in the room
-        return unless timing_is_right?
+        return unless can_respond?
+        redis.set(response_key(response.user.name), response.matches.first)
         response.reply('Response recorded. Thanks for partipating')
-        date_string = Time.now.strftime('%Y%m%d')
-        user_name = response.user.name.split(' ').join('_') #lol
-        redis.set(date_string + '-' + user_name, response.matches.first)
       end
 
       def update_room(response)
         room = Source.new(room: response.room)
         message_body = ''
-        response_prefix = Date.parse(redis.get("last_standup_started_at")).strftime('%Y%m%d')
+        response_prefix = started_at.strftime('%Y%m%d')
         redis.keys.each do |key|
           if key.to_s.include? response_prefix
-            message_body += key.gsub(Date.parse(redis.get("last_standup_started_at")).strftime('%Y%m%d') + '-', "")
+            message_body += key.gsub(response_prefix + '-', "")
             message_body += "\n"
             message_body += MultiJson.load(redis.get(key)).join("\n")
             message_body += "\n"
@@ -124,31 +109,36 @@ module Lita
 
       private
 
-      def check_completion
-        completed = []
-        not_completed = []
-        results = []
-        check_prefix = Date.parse(redis.get("last_standup_started_at")).strftime('%Y%m%d')
-        @users.each do | user |
-          check = redis.get(check_prefix + "-" + user)
-          if check.nil?
-            not_completed[] = user
+      def nag_users_for_response
+        every(config.nag_frequency) do |timer|
+          user_responses = check_completion
+          if user_responses[:incomplete].empty? || !can_respond?
+            timer.stop
           else
-            completed[] = user
+            user_responses[:incomplete].each do |user|
+              send_nag(user)
+            end
           end
         end
-        results['completed'] = completed
-        results['not_completed'] = not_completed
-        return results
       end
 
-      def send_nag(user)
-        last_check = redis.get('last_standup_started_at')
-        if last_check < config.time_to_respond.ago?
-          source = Lita::Source.new(user: user)
-          robot.send_message(source, 'Hate to nag like a wife but would for the shake of god.')
-          robot.send_message(source, 'Send in your Standup notes using standup response!')
+       def check_completion
+        result = { complete: [], incomplete: [] }
+        @users.each do |user|
+          response = redis.get(response_key(user.name))
+          if response.present?
+            result[:complete] << user
+          else
+            result[:incomplete] << user
+          end
         end
+        result
+      end
+
+       def send_nag(user)
+        source = Lita::Source.new(user: user)
+        robot.send_message(source, 'Hate to nag but would for the shake of god.')
+        robot.send_message(source, 'Send in your Standup notes using standup response!')
       end
 
       def message_all_users
@@ -157,6 +147,14 @@ module Lita
           robot.send_message(source, "Time for standup!")
           robot.send_message(source, config.standup_message)
         end
+      end
+
+      def response_key(username, timestamp=started_at)
+        return timestamp.strftime('%Y%m%d') + "-" + cleanup_username(username)
+      end
+
+      def cleanup_username(username)
+        username.gsub(' ', '_')
       end
 
       def find_and_create_users
